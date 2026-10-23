@@ -1,1 +1,3 @@
 .venv/
+artifacts/
+.ipynb_checkpoints/
