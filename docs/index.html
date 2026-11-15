@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vision Inference Benchmark — MobileNetV3-Small FP32 vs INT8</title>
+<meta name="description" content="CPU benchmark of MobileNetV3-Small: PyTorch to ONNX FP32 to static INT8. 2.07x faster, 73% smaller — and the prediction changed, which is the point.">
+<meta name="theme-color" content="#f4f4f0">
+<meta property="og:title" content="Vision Inference Benchmark — 2.07x faster, not yet correct">
+<meta property="og:description" content="FP32 vs static INT8 on CPU: latency, size, RSS, and the sample prediction that changed class.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📉</text></svg>">
+<style>
+  :root {
+    --paper: #f4f4f0;
+    --card: #fffef9;
+    --ink: #14171a;
+    --muted: #6b7076;
+    --line: #dcdcd4;
+    --blue: #1f4fd8;
+    --green: #127a4a;
+    --red: #b42318;
+    --amber: #b45309;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 17px; line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    background-image: linear-gradient(rgba(20,23,26,.030) 1px, transparent 1px),
+                      linear-gradient(90deg, rgba(20,23,26,.030) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { width: min(1020px, 92vw); margin: 0 auto; }
+
+  header { display: flex; align-items: center; justify-content: space-between; padding: 18px 0; border-bottom: 2px solid var(--ink); }
+  .brand { font-family: var(--mono); font-size: .84rem; font-weight: 600; letter-spacing: -.01em; }
+  nav { display: flex; gap: 18px; font-size: .84rem; font-family: var(--mono); }
+  nav a { color: var(--muted); }
+  nav a:hover { color: var(--ink); text-decoration: none; }
+
+  .hero { padding: 52px 0 12px; }
+  .kicker { font-family: var(--mono); font-size: .72rem; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin: 0 0 14px; }
+  h1 { font-size: clamp(1.9rem, 4.6vw, 3rem); line-height: 1.08; letter-spacing: -.035em; margin: 0 0 16px; font-weight: 700; }
+  .lede { color: var(--muted); max-width: 64ch; margin: 0 0 8px; }
+  .lede strong { color: var(--ink); font-weight: 600; }
+  .method { font-family: var(--mono); font-size: .78rem; color: var(--muted); margin: 0 0 30px; }
+
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 12px; }
+  .metric { background: var(--card); border: 1px solid var(--line); border-top: 3px solid var(--ink); border-radius: 4px; padding: 16px 16px 14px; }
+  .metric .label { font-family: var(--mono); font-size: .66rem; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  .metric .value { font-family: var(--mono); font-size: 1.72rem; font-weight: 700; letter-spacing: -.03em; margin: 6px 0 2px; }
+  .metric .note { font-size: .76rem; color: var(--muted); }
+  .metric.warn { border-top-color: var(--red); }
+  .metric.warn .value { color: var(--red); font-size: 1.05rem; letter-spacing: -.01em; }
+
+  .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 26px; }
+  .chart { background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 18px 20px; }
+  .chart h3 { margin: 0 0 16px; font-family: var(--mono); font-size: .74rem; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+  .row { display: grid; grid-template-columns: 54px 1fr 78px; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .row .k { font-family: var(--mono); font-size: .74rem; color: var(--muted); }
+  .row .v { font-family: var(--mono); font-size: .74rem; text-align: right; color: var(--ink); }
+  .bar { height: 22px; background: #ebebe4; border-radius: 2px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; width: 0; transition: width 1.1s cubic-bezier(.2,.7,.2,1); }
+  .bar.fp32 > span { background: #9aa0a6; }
+  .bar.int8 > span { background: var(--green); }
+  .bar.bytes-int8 > span { background: var(--blue); }
+
+  section { padding: 52px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: clamp(1.25rem, 3vw, 1.65rem); letter-spacing: -.025em; margin: 0 0 12px; font-weight: 680; }
+  .sub { color: var(--muted); max-width: 68ch; margin: 0 0 28px; }
+
+  .callout {
+    border: 1px solid #e7c9c4; background: #fdf3f1; border-left: 4px solid var(--red);
+    padding: 16px 18px; border-radius: 0 4px 4px 0; font-size: .92rem;
+  }
+  .callout strong { color: var(--red); }
+
+  table { width: 100%; border-collapse: collapse; font-size: .87rem; background: var(--card); }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  th { font-family: var(--mono); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 500; background: #faf9f4; }
+  td.num { font-family: var(--mono); }
+
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+  pre.shell {
+    background: #14171a; color: #e8e6df; border-radius: 4px; padding: 18px 20px;
+    font-family: var(--mono); font-size: .78rem; line-height: 1.85; overflow-x: auto; margin: 0;
+  }
+  pre.shell .c { color: #8b9198; }
+  pre.shell .p { color: #7dd3a8; }
+
+  ul.limits { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  ul.limits li { position: relative; padding-left: 22px; color: var(--muted); font-size: .9rem; }
+  ul.limits li::before { content: "!"; position: absolute; left: 0; top: 0; font-family: var(--mono); font-weight: 700; color: var(--amber); }
+
+  footer { border-top: 2px solid var(--ink); padding: 24px 0 50px; font-family: var(--mono); font-size: .76rem; color: var(--muted); display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
+
+  @media (max-width: 860px) {
+    .metrics { grid-template-columns: 1fr 1fr; }
+    .charts, .two { grid-template-columns: 1fr; }
+    nav a:not(:last-child) { display: none; }
+  }
+  @media (max-width: 520px) { .metrics { grid-template-columns: 1fr; } }
+  @media (prefers-reduced-motion: reduce) { .bar > span { transition: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">vision-inference-bench</div>
+    <nav>
+      <a href="#numbers">numbers</a>
+      <a href="#honest">caveats</a>
+      <a href="#run">run</a>
+      <a href="https://github.com/sanjumsanthosh/vision-inference-bench">github ↗</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" style="border-top:none">
+      <p class="kicker">MobileNetV3‑Small · PyTorch → ONNX FP32 → static INT8</p>
+      <h1>2.07× faster, 73% smaller —<br>and the prediction changed.</h1>
+      <p class="lede">
+        A CPU benchmark of one small vision model, quantized end to end. The speedup is real and
+        repeatable. <strong>The accuracy isn't established</strong>, and the repo says so instead of
+        hiding it.
+      </p>
+      <p class="method">Apple M4 Pro · macOS 26.7.1 arm64 · ONNX Runtime 1.31.0 · CPUExecutionProvider · 1 thread · 20 warm‑up / 200 measured</p>
+
+      <div class="metrics">
+        <div class="metric"><div class="label">Median latency</div><div class="value">1.495 ms</div><div class="note">from 3.095 ms</div></div>
+        <div class="metric"><div class="label">Median speedup</div><div class="value">2.07×</div><div class="note">p95: 3.300 → 1.603 ms</div></div>
+        <div class="metric"><div class="label">Model size</div><div class="value">2.69 MiB</div><div class="note">−73.1% from 9.99 MiB</div></div>
+        <div class="metric warn"><div class="label">Held-out accuracy</div><div class="value">not measured</div><div class="note">camel → pinwheel on the sample</div></div>
+      </div>
+
+      <div class="charts" id="numbers">
+        <div class="chart">
+          <h3>Median inference (ms, lower is better)</h3>
+          <div class="row"><span class="k">FP32</span><div class="bar fp32"><span data-w="100"></span></div><span class="v">3.095</span></div>
+          <div class="row"><span class="k">INT8</span><div class="bar int8"><span data-w="48.3"></span></div><span class="v">1.495</span></div>
+        </div>
+        <div class="chart">
+          <h3>Model file (MiB, lower is better)</h3>
+          <div class="row"><span class="k">FP32</span><div class="bar fp32"><span data-w="100"></span></div><span class="v">9.99</span></div>
+          <div class="row"><span class="k">INT8</span><div class="bar bytes-int8"><span data-w="26.9"></span></div><span class="v">2.69</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="honest">
+      <h2>What the numbers do and don't say</h2>
+      <p class="sub">A quantization result is two claims: it got faster, and it still works. Only the first one is measured here.</p>
+
+      <div class="callout">
+        <strong>The sample prediction changed class</strong> — 354 <em>Arabian camel</em> (FP32) → 723 <em>pinwheel</em> (INT8),
+        with a maximum absolute logit difference of 21.43 and a mean of 3.32. One image proves nothing about
+        accuracy either way, which is exactly why held‑out accuracy is reported as <code>null</code> rather than skipped.
+      </div>
+
+      <div class="two" style="margin-top:22px">
+        <ul class="limits">
+          <li>The camel → pinwheel disagreement needs bisecting across PyTorch, exported FP32, prepared FP32 and INT8 before anyone says "accuracy‑preserving".</li>
+          <li>Labelled evaluation images must map Imagenette's <code>0–9</code> to ImageNet's <code>0–999</code>; the guard rejects reused calibration paths but not a copied file.</li>
+          <li>One matching top‑1 prediction would still not establish accuracy.</li>
+        </ul>
+        <ul class="limits">
+          <li>Calibration and sample images aren't bundled, and the snapshot has no hashes — exact reproduction isn't possible from this repo alone.</li>
+          <li>CPU only: no GPU/DSP, Snapdragon, headset, power, or camera‑to‑result latency claims.</li>
+          <li>The latency table compares ONNX FP32 vs ONNX INT8 — not PyTorch vs ONNX.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>Recorded conditions</h2>
+      <p class="sub">Every one of these moves the number. Re‑measure on your machine before quoting it.</p>
+      <table>
+        <tbody>
+          <tr><th>CPU / OS</th><td class="num">Apple M4 Pro / macOS 26.7.1, arm64</td></tr>
+          <tr><th>Runtime</th><td class="num">ONNX Runtime 1.31.0 · CPUExecutionProvider · sequential</td></tr>
+          <tr><th>Input</th><td class="num">batch 1 · float32 [1, 3, 224, 224]</td></tr>
+          <tr><th>Threads</th><td class="num">intra 1 / inter 1</td></tr>
+          <tr><th>Loop</th><td class="num">20 warm‑up · 200 measured</td></tr>
+          <tr><th>Stack</th><td class="num">Python 3.14.0 · PyTorch 2.14.1 · TorchVision 0.29.1</td></tr>
+          <tr><th>Calibration</th><td class="num">200 Imagenette images · 10 classes × 20 · 320 px split</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="run">
+      <h2>Run it</h2>
+      <div class="two">
+        <pre class="shell"><span class="c"># python3 -m venv .venv &amp;&amp; source .venv/bin/activate</span>
+<span class="p">$</span> pip install torch torchvision onnx onnxruntime \
+    onnxscript pillow numpy jupyterlab
+<span class="p">$</span> python -m jupyterlab train.ipynb
+
+<span class="c"># first cell: sample image, calibration dir,</span>
+<span class="c"># warm-up/measured runs, thread counts</span>
+<span class="c"># run top to bottom → artifacts/ + results JSON</span></pre>
+
+        <div class="chart">
+          <h3>Peak process RSS (MiB)</h3>
+          <div class="row"><span class="k">FP32</span><div class="bar fp32"><span data-w="100"></span></div><span class="v">85.375</span></div>
+          <div class="row"><span class="k">INT8</span><div class="bar int8"><span data-w="81.5"></span></div><span class="v">69.578</span></div>
+          <p style="margin:16px 0 0;font-size:.8rem;color:var(--muted)">
+            Whole process, fresh run per model — interpreter and runtime included, not model memory alone.
+          </p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>recorded 23 Oct 2026 · snapshot, not auto‑updated</span>
+    <span><a href="https://github.com/sanjumsanthosh/vision-inference-bench">source</a> · <a href="https://github.com/sanjumsanthosh/vision-inference-bench/blob/main/benchmark_results.json">results.json</a></span>
+  </footer>
+</div>
+
+<script>
+  (function () {
+    var bars = document.querySelectorAll('.bar > span');
+    if (!bars.length) return;
+    var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    function fill() { bars.forEach(function (b) { b.style.width = b.dataset.w + '%'; }); }
+    if (reduce) { fill(); return; }
+    if ('IntersectionObserver' in window) {
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) { if (e.isIntersecting) { fill(); io.disconnect(); } });
+      }, { threshold: 0.2 });
+      io.observe(bars[0].closest('.chart'));
+    } else { fill(); }
+  })();
+</script>
+</body>
+</html>
